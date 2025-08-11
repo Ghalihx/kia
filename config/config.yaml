@@ -1,0 +1,32 @@
+data:
+  date_column: periode
+  target_column: permohonan_kia
+  lags: [1, 2, 3, 12]
+  rollings: [3, 6, 12]
+  holiday_country: ID
+  add_sin_cos: true        # aktifkan fitur sin/cos month
+
+training:
+  holdout_months: 6
+  min_train_rows: 24
+  xgb_early_stopping_rounds: 30
+  seasonal_tolerance_mape: 0.3   # toleransi (poin MAPE) agar seasonal_naive boleh menggantikan naive
+  use_blend: true
+  blend_weight: auto              # w pada: w * naive + (1-w) * seasonal_naive
+
+model:
+  xgb_params:
+    n_estimators: 500
+    learning_rate: 0.05
+    max_depth: 4
+    subsample: 0.9
+    colsample_bytree: 0.9
+    reg_lambda: 1.0
+    reg_alpha: 0.0
+    random_state: 42
+    tree_method: auto
+    objective: reg:squarederror
+
+forecast:
+  horizon: 6
+  max_horizon: 24
