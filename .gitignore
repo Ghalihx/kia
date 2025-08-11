@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+.dist/
+build/
+dist/
+.venv/
+venv/
+ENV/
+env/
+pip-wheel-metadata/
+
+# Jupyter/Streamlit
+.ipynb_checkpoints/
+.streamlit/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project
+models/

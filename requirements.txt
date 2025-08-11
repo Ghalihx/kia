@@ -1,0 +1,32 @@
+# ---- Core runtime ----
+python-dotenv>=1.0.0
+streamlit>=1.32.0
+pandas>=2.1.0
+numpy>=1.24.0
+plotly>=5.18.0
+
+# ---- Modeling / ML ----
+scikit-learn>=1.3.0
+xgboost>=1.7.6          # Jika opsi model xgboost digunakan
+statsmodels>=0.14.0     # Jika nanti mau tambah SARIMAX / analisis musiman
+
+# ---- Utilities ----
+pyyaml>=6.0.1           # load_config jika pakai YAML/TOML (ubah bila perlu)
+toml>=0.10.2            # kalau config masih format .toml
+joblib>=1.3.0           # penyimpanan artifact (opsional)
+pydantic>=2.0.0         # validasi data (hapus jika tidak dipakai)
+
+# ---- (Opsional) Export / Laporan ----
+# openpyxl>=3.1.0       # ekspor Excel
+# reportlab>=4.0.0      # jika ingin PDF custom
+# weasyprint            # alternatif PDF (butuh deps sistem)
+
+# ---- Dev / Quality (opsional) ----
+# black
+# isort
+# flake8
+# mypy
+
+# Catatan:
+# 1. Jika deployment ingin lebih ringan dan tidak pakai XGBoost, hapus baris xgboost.
+# 2. Sesuaikan versi sesuai constraints platform (misal Streamlit Cloud).
