@@ -1,184 +1,190 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import Dict, List
-
+import pickle
 import numpy as np
 import pandas as pd
-import joblib
-
-try:
-    import holidays as pyholidays
-except Exception:
-    pyholidays = None  # type: ignore
 
 
-def _to_month_start(ts) -> pd.Timestamp:
-    ts = pd.to_datetime(ts)
-    return pd.Timestamp(year=ts.year, month=ts.month, day=1)
+def load_artifact(prefix_path: str):
+    """
+    prefix_path contoh: models/kia_forecast
+    Akan mencari file prefix_path_latest.pkl
+    """
+    p = Path(f"{prefix_path}_latest.pkl")
+    if not p.exists():
+        raise FileNotFoundError(f"Artifact tidak ditemukan: {p}")
+    with p.open("rb") as f:
+        return pickle.load(f)
 
 
-def _holiday_calendar(years, country_code: str):
-    if pyholidays is None:
-        return set()
-    try:
-        return pyholidays.country_holidays(country_code=country_code, years=sorted(set(years)))
-    except Exception:
-        return set()
-
-
-def _holiday_count_for_month(ts: pd.Timestamp, hcal) -> int:
-    if not hcal:
-        return 0
-    start = ts
-    end = ts + pd.offsets.MonthEnd(0)
-    days = pd.date_range(start, end, freq="D")
-    return sum(1 for d in days if d in hcal)
-
-
-def _prepare_hist(df_hist: pd.DataFrame, cfg: Dict) -> pd.DataFrame:
+def forecast_iterative_naive(df_hist: pd.DataFrame, cfg: dict, horizon: int) -> pd.DataFrame:
     dcol = cfg["data"]["date_column"]
     ycol = cfg["data"]["target_column"]
-    if dcol not in df_hist.columns or ycol not in df_hist.columns:
-        raise ValueError(f"Data historis harus mengandung kolom {dcol} dan {ycol}.")
-    out = df_hist[[dcol, ycol]].copy()
-    out[dcol] = out[dcol].apply(_to_month_start)
-    out = out.groupby(dcol, as_index=False)[ycol].sum()
-    out = out.sort_values(dcol).reset_index(drop=True)
-
-    dates = out[dcol]
-    full_range = pd.date_range(dates.iloc[0], dates.iloc[-1], freq="MS")
-    if len(full_range) != len(dates):
-        missing = full_range.difference(dates)
-        if len(missing) > 0:
-            miss_list = [d.strftime("%Y-%m") for d in missing]
-            raise ValueError(
-                f"Data historis tidak kontigu. Bulan hilang: {miss_list}. Lengkapi atau isi 0."
-            )
-    return out
-
-
-def _build_feature_row(
-    hist: pd.DataFrame,
-    next_date: pd.Timestamp,
-    cfg: Dict,
-    hcal,
-) -> Dict:
-    dcol = cfg["data"]["date_column"]
-    ycol = cfg["data"]["target_column"]
-    lags: List[int] = cfg["data"]["lags"]
-    rollings: List[int] = cfg["data"]["rollings"]
-    add_sin_cos = cfg["data"].get("add_sin_cos", True)
-
-    row = {
-        dcol: next_date,
-        "month": next_date.month,
-        "quarter": ((next_date.month - 1) // 3) + 1,
-        "year": next_date.year,
-        "holiday_count": _holiday_count_for_month(next_date, hcal),
-    }
-    if add_sin_cos:
-        row["sin_month"] = np.sin(2 * np.pi * next_date.month / 12.0)
-        row["cos_month"] = np.cos(2 * np.pi * next_date.month / 12.0)
-
-    hist_indexed = hist.set_index(dcol)
-
-    for lag in lags:
-        lag_date = next_date - pd.DateOffset(months=lag)
-        row[f"{ycol}_lag{lag}"] = float(hist_indexed.at[lag_date, ycol]) if lag_date in hist_indexed.index else np.nan
-
-    for win in rollings:
-        start_date = next_date - pd.DateOffset(months=win)
-        window_vals = hist[(hist[dcol] >= start_date) & (hist[dcol] < next_date)][ycol]
-        row[f"{ycol}_roll{win}"] = float(window_vals.mean()) if len(window_vals) == win else np.nan
-
-    return row
-
-
-def forecast_iterative_xgb(df_hist: pd.DataFrame, artifact: Dict, horizon: int) -> pd.DataFrame:
-    if "model" not in artifact:
-        raise ValueError("Artifact tidak memiliki 'model'.")
-    if "feature_names" not in artifact:
-        raise ValueError("Artifact tidak memiliki 'feature_names'.")
-    model = artifact["model"]
-    cfg = artifact["cfg"]
-    feature_names = artifact["feature_names"]
-
-    dcol = cfg["data"]["date_column"]
-    ycol = cfg["data"]["target_column"]
-
-    hist = _prepare_hist(df_hist, cfg)
+    hist = df_hist[[dcol, ycol]].copy()
+    hist[dcol] = pd.to_datetime(hist[dcol])
+    hist = hist.sort_values(dcol)
     last_date = hist[dcol].iloc[-1]
-    years_needed = list(range(hist[dcol].dt.year.min(), (last_date + pd.DateOffset(months=horizon)).year + 2))
-    hcal = _holiday_calendar(years_needed, cfg["data"].get("holiday_country", "ID"))
-
-    preds = []
-    for step in range(1, horizon + 1):
-        next_date = _to_month_start(last_date + pd.DateOffset(months=step))
-        feat_row = _build_feature_row(hist, next_date, cfg, hcal)
-        row_df = pd.DataFrame([feat_row])
-        if row_df[feature_names].isna().any(axis=None):
-            break
-        yhat = float(model.predict(row_df[feature_names])[0])
-        preds.append({dcol: next_date, "y_pred": yhat})
-        hist = pd.concat([hist, pd.DataFrame([{dcol: next_date, ycol: yhat}])], ignore_index=True)
-    return pd.DataFrame(preds)
-
-
-def forecast_iterative_seasonal_naive(df_hist: pd.DataFrame, cfg: Dict, horizon: int, season_length: int = 12) -> pd.DataFrame:
-    dcol = cfg["data"]["date_column"]
-    ycol = cfg["data"]["target_column"]
-    hist = _prepare_hist(df_hist, cfg)
-    hist_indexed = hist.set_index(dcol)
-    last_date = hist[dcol].iloc[-1]
-    preds = []
+    last_val = float(hist[ycol].iloc[-1])
+    rows = []
     for h in range(1, horizon + 1):
-        next_date = _to_month_start(last_date + pd.DateOffset(months=h))
-        season_date = next_date - pd.DateOffset(months=season_length)
-        val = float(hist_indexed.at[season_date, ycol]) if season_date in hist_indexed.index else float(hist_indexed[ycol].iloc[-1])
-        preds.append({dcol: next_date, "y_pred": val})
-        hist = pd.concat([hist, pd.DataFrame([{dcol: next_date, ycol: val}])], ignore_index=True)
-        hist_indexed = hist.set_index(dcol)
-    return pd.DataFrame(preds)
+        nd = last_date + pd.DateOffset(months=h)
+        rows.append({dcol: nd, "y_pred": last_val})
+    return pd.DataFrame(rows)
 
 
-def forecast_iterative_naive(df_hist: pd.DataFrame, cfg: Dict, horizon: int) -> pd.DataFrame:
+def forecast_iterative_naive_drift(df_hist: pd.DataFrame, cfg: dict, horizon: int) -> pd.DataFrame:
+    """
+    Naive dengan drift linear:
+    drift = mean(y_t - y_{t-1}) pada seluruh history.
+    Forecast(h) = last_val + h * drift
+    """
     dcol = cfg["data"]["date_column"]
     ycol = cfg["data"]["target_column"]
-    hist = _prepare_hist(df_hist, cfg)
-    last_value = float(hist[ycol].iloc[-1])
+    hist = df_hist[[dcol, ycol]].copy()
+    hist[dcol] = pd.to_datetime(hist[dcol])
+    hist = hist.sort_values(dcol)
+    if len(hist) < 2:
+        drift = 0.0
+    else:
+        diffs = hist[ycol].diff().dropna()
+        drift = float(diffs.mean())
     last_date = hist[dcol].iloc[-1]
-    preds = []
+    last_val = float(hist[ycol].iloc[-1])
+    rows = []
     for h in range(1, horizon + 1):
-        next_date = _to_month_start(last_date + pd.DateOffset(months=h))
-        preds.append({dcol: next_date, "y_pred": last_value})
-    return pd.DataFrame(preds)
+        nd = last_date + pd.DateOffset(months=h)
+        yhat = last_val + h * drift
+        rows.append({dcol: nd, "y_pred": yhat})
+    return pd.DataFrame(rows)
 
 
-def load_artifact(prefix_path: str) -> Dict:
-    meta_path = Path(prefix_path + ".json")
-    if not meta_path.exists():
-        raise FileNotFoundError(f"Metadata tidak ditemukan: {meta_path}")
-    with open(meta_path, "r", encoding="utf-8") as f:
-        meta = json.load(f)
+def forecast_iterative_seasonal_naive(df_hist: pd.DataFrame,
+                                      cfg: dict,
+                                      horizon: int,
+                                      season_length: int = 12) -> pd.DataFrame:
+    dcol = cfg["data"]["date_column"]
+    ycol = cfg["data"]["target_column"]
+    hist = df_hist[[dcol, ycol]].copy()
+    hist[dcol] = pd.to_datetime(hist[dcol])
+    hist = hist.sort_values(dcol)
+    last_date = hist[dcol].iloc[-1]
 
-    if meta.get("model_name") == "xgboost":
-        model_path = Path(prefix_path + "_model.pkl")
-        if model_path.exists():
-            try:
-                model = joblib.load(model_path)
-                meta["model"] = model
-            except Exception as e:
-                meta["model_load_error"] = f"Gagal memuat model: {e}"
+    rows = []
+    for h in range(1, horizon + 1):
+        nd = last_date + pd.DateOffset(months=h)
+        prev_season = nd - pd.DateOffset(months=season_length)
+        val = hist.loc[hist[dcol] == prev_season, ycol]
+        if val.empty:
+            # fallback: bulan sebelumnya
+            prev1 = nd - pd.DateOffset(months=1)
+            val = hist.loc[hist[dcol] == prev1, ycol]
+        if val.empty:
+            # fallback akhir
+            yhat = float(hist[ycol].iloc[-1])
         else:
-            meta["model_load_error"] = f"File model tidak ditemukan: {model_path}"
-    return meta
+            yhat = float(val.values[0])
+        rows.append({dcol: nd, "y_pred": yhat})
+    return pd.DataFrame(rows)
 
 
-__all__ = [
-    "forecast_iterative_xgb",
-    "forecast_iterative_seasonal_naive",
-    "forecast_iterative_naive",
-    "load_artifact",
-]
+def forecast_iterative_xgb(df_hist: pd.DataFrame,
+                           artifact: dict,
+                           horizon: int) -> pd.DataFrame:
+    """
+    Iteratif per horizon. Jika fitur lag/rolling yang dibutuhkan tidak bisa dibangun (karena
+    dependensi ke horizon sebelumnya), akan berhenti lebih cepat.
+    """
+    import xgboost as xgb
+
+    dcol = artifact["date_column"]
+    ycol = artifact["target_column"]
+    feature_cols = artifact["feature_columns"]
+
+    hist = df_hist[[dcol, ycol]].copy()
+    hist[dcol] = pd.to_datetime(hist[dcol])
+    hist = hist.sort_values(dcol).reset_index(drop=True)
+
+    # Rekonstruksi booster
+    booster_raw = artifact.get("xgb_model_raw")
+    if booster_raw is None:
+        raise ValueError("xgboost model_raw tidak tersedia.")
+    booster = xgb.Booster()
+    booster.load_model(bytearray(booster_raw, encoding="latin1", errors="ignore"))
+
+    rows = []
+    # Kita butuh generate fitur baru setiap langkah
+    for h in range(1, horizon + 1):
+        next_date = hist[dcol].iloc[-1] + pd.DateOffset(months=1)
+        # Bangun baris fitur dari hist terbaru
+        temp = hist.copy()
+
+        # Fitur dasar
+        month = next_date.month
+        year = next_date.year
+        t_val = len(temp)
+
+        # Lags
+        feat = {}
+        for col in feature_cols:
+            # Isi default
+            feat[col] = 0.0
+
+        # Isi fitur lags kalau ada
+        for c in feature_cols:
+            if c.startswith("lag_"):
+                try:
+                    lag_n = int(c.split("_")[1])
+                    if len(temp) >= lag_n:
+                        feat[c] = float(temp[ycol].iloc[-lag_n])
+                except Exception:
+                    pass
+            elif c.startswith("roll_mean_"):
+                try:
+                    w = int(c.split("_")[-1])
+                    if len(temp) >= w:
+                        feat[c] = float(temp[ycol].tail(w).mean())
+                except Exception:
+                    pass
+            elif c.startswith("roll_std_"):
+                try:
+                    w = int(c.split("_")[-1])
+                    if len(temp) >= w:
+                        feat[c] = float(temp[ycol].tail(w).std(ddof=0))
+                except Exception:
+                    pass
+            elif c == "month":
+                feat[c] = month
+            elif c == "year":
+                feat[c] = year
+            elif c == "t":
+                feat[c] = t_val
+            elif c == "month_sin":
+                feat[c] = float(np.sin(2 * np.pi * month / 12))
+            elif c == "month_cos":
+                feat[c] = float(np.cos(2 * np.pi * month / 12))
+            elif c == "diff_1":
+                if len(temp) >= 1:
+                    feat[c] = float(temp[ycol].iloc[-1] - temp[ycol].iloc[-2]) if len(temp) >= 2 else 0.0
+            elif c == "diff_12":
+                if len(temp) >= 13:
+                    feat[c] = float(temp[ycol].iloc[-1] - temp[ycol].iloc[-13])
+
+        # Cek kelengkapan minimal (misal butuh lag terbesar)
+        needed_lags = [int(c.split("_")[1]) for c in feature_cols if c.startswith("lag_")]
+        if needed_lags:
+            max_lag = max(needed_lags)
+            if len(temp) < max_lag:
+                # Tidak bisa lanjut horizon berikut
+                break
+
+        feat_vec = np.array([[feat[c] for c in feature_cols]], dtype=float)
+        dmatrix = xgb.DMatrix(feat_vec, feature_names=feature_cols)
+        y_pred = float(booster.predict(dmatrix)[0])
+
+        rows.append({dcol: next_date, "y_pred": y_pred})
+        # Append ke hist untuk horizon selanjutnya
+        hist = pd.concat([hist, pd.DataFrame({dcol: [next_date], ycol: [y_pred]})],
+                         ignore_index=True)
+
+    return pd.DataFrame(rows)
