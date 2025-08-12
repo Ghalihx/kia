@@ -1,0 +1,14 @@
+[data]
+date_column = "periode"
+target_column = "permohonan_kia"
+lags = [1, 2, 3, 12]
+rollings = [3, 6, 12]
+add_sin_cos = true
+
+[training]
+holdout_months = 6
+season_length = 12
+
+[forecast]
+horizon = 6
+max_horizon = 24
