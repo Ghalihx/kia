@@ -1,74 +1,96 @@
+from __future__ import annotations
 import numpy as np
+from typing import Tuple, Optional
 
-def compute_prediction_intervals(
-    point_forecast: np.ndarray,
-    residuals: np.ndarray,
-    alpha: float = 0.05,
-    method: str = "quantile",
-    model_name: str = "",
-    scale_for_horizon: bool = True
-):
+# Coba pakai SciPy untuk z-value; jika tidak ada, fallback manual
+try:
+    from scipy.stats import norm
+except ImportError:
+    norm = None
+
+
+def _z_from_alpha(alpha: float) -> float:
     """
-    Hitung interval prediksi sederhana berbasis residual holdout.
-
-    Parameter:
-      point_forecast : np.ndarray shape (H,)
-      residuals      : np.ndarray residual historis (y_true - y_pred)
-      alpha          : 0.05 untuk 95% CI
-      method         : 'quantile' atau 'normal'
-      model_name     : nama model (bisa dipakai menentukan skala horizon)
-      scale_for_horizon : jika True dan model tipe naive/seasonal/blend,
-                          varian diperbesar sqrt(h) (random walk-ish).
-
-    Catatan:
-      - Interval ini sangat sederhana dan mengasumsikan residual stasioner.
-      - Dengan sedikit residual (misal holdout 6), hasil bisa tidak stabil.
+    Ambil z (two-sided) untuk alpha (misal alpha=0.05 -> ~1.96).
+    Fallback kalau scipy tidak tersedia: gunakan aproksimasi percentile normal.
     """
-    H = len(point_forecast)
+    if norm is not None:
+        return float(norm.ppf(1 - alpha / 2.0))
+    # Aproksimasi kasar pakai persentil simetri (cukup baik untuk alpha umum)
+    # alpha umum: 0.10 -> 1.645; 0.05 -> 1.96; 0.025 -> 2.24; 0.01 -> 2.575
+    common = {
+        0.10: 1.6449,
+        0.05: 1.96,
+        0.025: 2.2414,
+        0.01: 2.5758,
+        0.001: 3.2905,
+    }
+    # Cari yang mendekati
+    return common.get(round(alpha, 5), 1.96)
+
+
+def compute_prediction_intervals(point_forecast: np.ndarray,
+                                 residuals: np.ndarray,
+                                 alpha: float = 0.05,
+                                 method: str = "quantile",
+                                 model_name: Optional[str] = None,
+                                 scale_for_horizon: bool = True
+                                 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Mengembalikan tuple: (point_forecast, lower, upper)
+
+    Parameters
+    ----------
+    point_forecast : np.ndarray
+        Array nilai prediksi titik (horizon urut).
+    residuals : np.ndarray
+        Residual historis (actual - prediksi) dari holdout.
+    alpha : float
+        1 - confidence level. alpha=0.05 => 95% interval.
+    method : str
+        "quantile" (empiris) atau "normal".
+    model_name : Optional[str]
+        Hanya dummy agar kompatibel dengan pemanggilan lama (tidak dipakai).
+    scale_for_horizon : bool
+        Jika method="normal" dan True, lebar interval diskalakan sqrt(h).
+
+    Returns
+    -------
+    (pf, lower, upper)
+        pf    = array point_forecast (dipastikan float)
+        lower = batas bawah
+        upper = batas atas
+    """
+    pf = np.asarray(point_forecast, dtype=float)
+    residuals = np.asarray(residuals, dtype=float)
+    # Bersihkan NaN
     residuals = residuals[~np.isnan(residuals)]
-    if residuals.size < 3:
-        # fallback: garis tanpa lebar
-        return point_forecast, point_forecast, point_forecast
 
-    h_idx = np.arange(1, H + 1)
-    if scale_for_horizon and any(k in model_name.lower() for k in ["naive", "seasonal", "blend"]):
-        scale = np.sqrt(h_idx)  # asumsi random walk-ish
-    else:
-        scale = np.ones(H)
+    # Jika residual minim, tidak bisa bikin interval berarti → pakai pf saja
+    if residuals.size < 2:
+        return pf, pf.copy(), pf.copy()
+
+    alpha = float(alpha)
+    method = (method or "quantile").lower().strip()
 
     if method == "normal":
-        # Approx z untuk alpha (hindari dependency scipy)
-        from math import sqrt
-        # z 2-sided (alpha=0.05 -> 1.96); untuk general alpha gunakan aproksimasi:
-        # z ≈ 1.96 untuk 0.05, 1.645 untuk 0.10, 2.576 untuk 0.01
-        if abs(alpha - 0.05) < 1e-6:
-            z = 1.96
-        elif abs(alpha - 0.10) < 1e-6:
-            z = 1.645
-        elif abs(alpha - 0.01) < 1e-6:
-            z = 2.576
-        else:
-            # fallback via persentil normal aproks sederhana (Beasley-Springer/Moro rumus disederhanakan)
-            # Demi kesederhanaan: gunakan numpy quantile residual untuk substitusi (kurang tepat utk z)
-            z = np.quantile(np.abs((residuals - residuals.mean()) / (residuals.std(ddof=1) + 1e-9)), 1 - alpha/2)
-            if z <= 0:
-                z = 1.96
-        sigma = residuals.std(ddof=1)
-        half_width = z * sigma * scale
-        lower = point_forecast - half_width
-        upper = point_forecast + half_width
-    else:
-        # quantile (default)
-        q_low = np.quantile(residuals, alpha / 2)
-        q_high = np.quantile(residuals, 1 - alpha / 2)
-        # Terapkan scaling ke rentang residu
-        center = (q_low + q_high) / 2
-        half = (q_high - q_low) / 2
-        adj_half = half * scale
-        # Gunakan center sebagai shift rata-rata residu
-        lower = point_forecast + center - adj_half
-        upper = point_forecast + center + adj_half
+        sigma = float(np.std(residuals, ddof=1))
+        z = _z_from_alpha(alpha)
+        lowers = []
+        uppers = []
+        for h, yhat in enumerate(pf, start=1):
+            scale = np.sqrt(h) if scale_for_horizon else 1.0
+            delta = z * sigma * scale
+            lowers.append(yhat - delta)
+            uppers.append(yhat + delta)
+        return pf, np.array(lowers), np.array(uppers)
 
-    # Pastikan lower <= upper
-    lower = np.minimum(lower, upper)
-    return point_forecast, lower, upper
+    # Default: quantile (empiris)
+    q_low = float(np.quantile(residuals, alpha / 2.0))
+    q_high = float(np.quantile(residuals, 1 - alpha / 2.0))
+    lower = pf + q_low
+    upper = pf + q_high
+    return pf, lower, upper
+
+
+__all__ = ["compute_prediction_intervals"]
