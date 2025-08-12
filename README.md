@@ -1,237 +1,276 @@
 # Sistem Prediksi Permohonan KIA  
-Disdukcapil Kota Bogor – Internal
+Disdukcapil Kota Bogor
 
-Dashboard Streamlit untuk:
-- Memuat data historis permohonan KIA (bulanan)
-- Melatih beberapa model baseline (naive, seasonal_naive) + XGBoost + (opsional) blend
-- Mengevaluasi (MAPE, RMSE, holdout plot)
-- Menghasilkan forecast ke depan (1–24 bulan)
-- Mengunduh hasil prediksi (CSV)
-
-> Catatan: Aplikasi ini untuk perencanaan internal. Tidak untuk publikasi eksternal tanpa verifikasi.
+Aplikasi ini membantu memprediksi jumlah Permohonan Kartu Identitas Anak (KIA) beberapa bulan ke depan menggunakan kombinasi model time series sederhana (naive, seasonal naive), model XGBoost, dan model blend (kombinasi teroptimasi dari dua model terbaik). Antarmuka disajikan melalui Streamlit agar mudah digunakan oleh pengguna non-teknis.
 
 ---
 
-## 1. Struktur Folder (Saran)
+## Fitur Utama
+- Upload data historis (format sederhana: periode, permohonan_kia)
+- Validasi dasar (format tanggal, nilai numerik)
+- Pelatihan cepat dengan holdout (default 6 bulan terakhir)
+- Evaluasi multi-model: naive, seasonal_naive, xgboost, blend
+- Pemilihan otomatis model terbaik berbasis MAPE terendah
+- Opsional: Analisis APE dan residual (Mode Advanced)
+- Interval prediksi (opsional – muncul di tabel, bukan grafik)
+- Penyimpanan artefak model (versi timestamp + latest)
+- Pencatatan riwayat pelatihan ke file model_history.csv
+- Ekspor hasil prediksi ke CSV
+
+---
+
+## Struktur Proyek
 
 ```
 .
 ├─ app/
 │  └─ streamlit_app.py
+├─ config/
+│  └─ config.toml
+├─ data/
+│  ├─ README.md
+│  └─ sample_kia.csv
+├─ models/                # Artefak model (*.pkl) & model_history.csv (setelah training)
 ├─ src/
 │  ├─ models/
-│  │  ├─ train.py
+│  │  ├─ baselines.py
 │  │  ├─ infer.py
-│  │  └─ baselines.py
+│  │  └─ train.py
 │  ├─ pipeline/
 │  │  └─ data_prep.py
-│  └─ utils/ (opsional)
-├─ models/               # artifact tersimpan (output training)
-├─ data/                 # contoh / staging CSV (jangan commit data sensitif)
-├─ assets/               # logo / css (jika dipakai)
+│  └─ utils/
+│     └─ intervals.py     # (opsional; hanya jika ingin interval)
+├─ .gitignore
 ├─ requirements.txt
-├─ config.yml / config.toml (jika ada)
 └─ README.md
 ```
 
-Jika saat ini struktur sedikit berbeda, sesuaikan bagian import di `streamlit_app.py`.
-
 ---
 
-## 2. Persyaratan Lingkungan
+## Persyaratan
+- Python 3.10+ (disarankan)
+- Paket pada requirements.txt (xgboost, streamlit, pandas, numpy, plotly, toml, dll.)
 
-- Python 3.9–3.11 (disarankan 3.10)
-- Lihat paket di `requirements.txt`
-- Untuk XGBoost di beberapa OS perlu compiler / wheel yang sesuai (di Streamlit Cloud biasanya langsung jalan)
+### Pastikan Masuk Ke Folder Kia ( C:\Users\USER\kia> )
 
 Install:
-
 ```bash
 python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install --upgrade pip
+source .venv/bin/activate        # (Windows: .venv\Scripts\activate)
 pip install -r requirements.txt
 ```
 
 ---
 
-## 3. Format Data Input
+## Format Data Input
 
-File CSV minimal berisi kolom:
+CSV minimal berisi dua kolom:
+| Kolom | Deskripsi | Contoh |
+|-------|-----------|--------|
+| periode | Tanggal awal bulan (YYYY-MM atau YYYY-MM-DD) | 2023-01-01 |
+| permohonan_kia | Jumlah permohonan (integer / float) | 1250 |
 
-| Kolom          | Tipe        | Keterangan                          |
-|----------------|-------------|-------------------------------------|
-| periode        | string/tanggal (YYYY-MM) | Periode bulanan (disarankan format YYYY-MM atau tanggal awal bulan) |
-| permohonan_kia | integer/float | Jumlah permohonan KIA pada periode itu |
-
-Contoh (CSV):
-
+Contoh (sample_kia.csv):
 ```csv
 periode,permohonan_kia
-2021-01,512
-2021-02,498
-2021-03,530
+2021-01-01,980
+2021-02-01,1005
+2021-03-01,995
 ...
 ```
 
-Pastikan:
-- Tidak ada duplikat periode
-- Urutan kronologis (jika tidak, pipeline akan mengurutkan)
-- Nilai negatif tidak diperbolehkan
+Catatan:
+- Tidak boleh ada duplikat periode
+- Tidak boleh ada bulan hilang di tengah (gap)
+- Nilai harus numerik (akan divalidasi)
 
 ---
 
-## 4. Menjalankan Aplikasi
+## Konfigurasi (config.toml)
 
-```bash
-streamlit run app/streamlit_app.py
-```
-
-Buka URL yang ditampilkan (biasanya http://localhost:8501).
-
----
-
-## 5. Alur Penggunaan
-
-1. Jalankan aplikasi.
-2. Unggah `CSV` historis.
-3. (Otomatis / tombol) latih model → muncul metrik & holdout.
-4. Tentukan horizon (misal 6 bulan) → klik "Prediksi ke Depan".
-5. Unduh hasil forecast (CSV).
-
----
-
-## 6. Model yang Didukung (Saat Ini)
-
-| Model             | Deskripsi                                                                 | Catatan |
-|-------------------|---------------------------------------------------------------------------|---------|
-| naive             | Prediksi = nilai terakhir                                                 | Baseline 1 |
-| seasonal_naive    | Prediksi = nilai periode sama musim sebelumnya (lag 12)                   | Perlu data ≥ 13 bulan |
-| xgboost           | Tree boosting dengan fitur lag/kalender sederhana                         | Opsional (hapus paket jika tidak dipakai) |
-| blend             | Kombinasi naive & seasonal (atau naive & xgboost) dengan bobot tertentu   | Bobot dapat disimpan di artifact |
-
-> Jika XGBoost gagal diload (misal environment terbatas), pipeline fallback ke model baseline.
-
----
-
-## 7. File Artifact
-
-Direktori `models/` akan menyimpan file artifact (misal `.pkl` atau `.json`) berisi:
-- model_name terpilih
-- skor setiap model
-- holdout preds
-- parameter (misal blend weight)
-
-Jangan commit artifact sensitif jika mengandung data asli.
-
----
-
-## 8. Evaluasi & Metrik
-
-- MAPE (Mean Absolute Percentage Error)
-- RMSE (Root Mean Squared Error)
-- Holdout: bagian akhir data (misal n bulan) dipisahkan untuk evaluasi
-
-Rumus MAPE aman:
-
-```
-MAPE = mean( |y_true - y_pred| / y_true ) * 100
-(dengan y_true == 0 → NaN / di-skip)
-```
-
----
-
-## 9. Konfigurasi
-
-Jika ada `config.yml` atau `config.toml`, contoh isi minimal:
-
+Contoh ringkas:
 ```toml
 [data]
 date_column = "periode"
 target_column = "permohonan_kia"
+lags = [1,2,3,12]
+rollings = [3,6,12]
+add_sin_cos = true
+
+[training]
+holdout_months = 6
+season_length = 12
 
 [forecast]
 horizon = 6
 max_horizon = 24
-
-[training]
-holdout_months = 6
-blend_weight = 0.5
 ```
 
-Modul `load_config()` harus membaca file ini. Jika tidak ada file, sediakan default di kode.
+Penjelasan:
+- holdout_months: jumlah bulan terakhir dipakai evaluasi
+- season_length: panjang musim (12 = tahunan)
+- horizon: default jumlah bulan ke depan untuk prediksi
 
 ---
 
-## 10. Penanganan Error Umum
+## Menjalankan Aplikasi
 
-| Gejala | Penyebab Umum | Solusi |
-|--------|---------------|--------|
-| Tombol prediksi tidak aktif | Artifact belum terbentuk / state belum rerun | Latih model ulang atau refresh |
-| MAPE NaN | Ada y_true = 0 | Filter / ganti 0 sementara (misal 0→eps) |
-| XGBoost ImportError | Paket tidak terinstall / platform tidak mendukung | Hapus dependensi XGBoost di pipeline |
-| Forecast melompat ekstrem | Outlier di ujung historis | Lakukan smoothing / median filter lokal |
+```bash
+streamlit run app/streamlit_app.py 
+.venv\Scripts\python.exe -m streamlit run app\streamlit_app.py
+```
 
----
-
-## 11. Roadmap Peningkatan (Opsional)
-
-- Interval kepercayaan sederhana (naive stdev)
-- Fitur kalender (libur nasional)
-- Logging metrik historis (JSON timeline)
-- Auto retrain (GitHub Actions / cron)
-- Ekspor PDF ringkasan
-- Validasi tambahan (gap periode otomatis deteksi)
+Langkah di UI:
+1. Unggah CSV historis
+2. Klik "Latih Model" (atau gunakan model tersimpan)
+3. Lihat skor model (MAPE & RMSE)
+4. Klik "Prediksi ke Depan" untuk forecast horizon tertentu
+5. (Opsional) Aktifkan Mode Advanced untuk lihat APE / residual / interval
+6. Unduh hasil CSV
 
 ---
 
-## 12. Kontribusi
+## Metodologi Pelatihan
 
-1. Fork atau buat branch feature
-2. Commit terpisah (satu fitur satu PR)
-3. Sertakan deskripsi perubahan + screenshot (jika UI)
-4. Pastikan lint dasar (opsional: jalankan `black`)
-
----
-
-## 13. Lisensi
-
-Tambahkan file `LICENSE` jika proyek akan dibuka lintas unit.  
-Jika purely internal → bisa ditulis “Hak Cipta Disdukcapil Kota Bogor (Internal Use Only)”.
-
----
-
-## 14. Kontak Internal
-
-| Peran | Nama / Unit | Catatan |
-|-------|-------------|---------|
-| Pemilik Produk | (isi) | Prioritas fitur |
-| Analis Data | (isi) | Retrain & evaluasi |
-| Admin Teknis | (isi) | Deployment / server |
+1. Data diurutkan kronologis
+2. Split: (Total - holdout_months) sebagai train, sisanya holdout
+3. Model yang dihitung:
+   - naive: ŷ_t = y_{t-1}
+   - seasonal_naive: ŷ_t = y_{t-12} (fallback ke y_{t-1} bila tidak ada)
+   - xgboost: regresi fitur (lag, rolling, sin/cos bulan, diff)
+   - blend: kombinasi w * xgboost + (1 - w) * seasonal_naive (w dicari grid 0..1 step 0.1)
+4. Skor dihitung (MAPE & RMSE) pada holdout
+5. Model terbaik = MAPE terendah (dengan logika override kecil bila naive menang tipis)
+6. Artefak disimpan sebagai:
+   - models/kia_forecast_<timestamp>.pkl
+   - models/kia_forecast_latest.pkl
 
 ---
 
-## 15. FAQ (Singkat)
+## Metrik
 
-**Q:** Kenapa setiap upload retrain otomatis?  
-**A:** Saat artifact belum ada atau tombol latih ditekan, pipeline berjalan. Bisa dimodifikasi agar hanya manual.
+- MAPE (%): Rata-rata kesalahan relatif. Cocok untuk interpretasi persentase.
+- RMSE: Akar rata-rata kuadrat error (memberi penalti tinggi pada kesalahan besar).
 
-**Q:** Kalau data kurang dari 12 bulan?  
-**A:** Model seasonal_naive mungkin tidak valid; fallback ke naive.
-
-**Q:** Bisa tambah model lain?  
-**A:** Ya; tambahkan di `src/models/train.py` (buat fungsi fit & predict) dan integrasikan di pemilihan skor.
+Interpretasi: semakin kecil kedua nilai → semakin baik.
 
 ---
 
-## 16. Changelog (Contoh)
-
-| Versi | Tanggal | Perubahan Ringkas |
-|-------|---------|-------------------|
-| v13   | 2025-08 | Layout tabs + hero |
-| v13.1 | (isi)   | (Misal) tambah toggles |
-| v14   | (isi)   | (Eksperimen step-by-step) |
+## Artefak Model (Isi Utama)
+Contoh kunci dalam artefak .pkl:
+```text
+model_name            # nama model terpilih ('blend', 'xgboost', dll.)
+scores                # dict: {model: {MAPE, RMSE}}
+holdout_dates         # daftar tanggal holdout
+holdout_y_actual      # nilai aktual holdout
+holdout_preds         # prediksi tiap model
+holdout_residuals     # residual tiap model
+blend_weight_final    # bobot w hasil optimasi (jika model blend)
+xgb_model_raw         # model XGBoost terserialisasi (string)
+feature_columns       # kolom fitur yang dipakai XGBoost
+cutoff_date           # tanggal terakhir data train
+schema_version        # versi struktur artefak
+```
 
 ---
 
-Selamat menggunakan & mengembangkan lebih lanjut.
+## Riwayat Pelatihan
+File: models/model_history.csv  
+Tiap pelatihan append baris:
+```
+timestamp,model_name,blend_weight,MAPE_naive,MAPE_seasonal,MAPE_xgb,MAPE_blend,RMSE_naive,RMSE_seasonal,RMSE_xgb,RMSE_blend
+```
+Gunakan untuk memantau drift performa antar re-train.
+
+---
+
+## Interval Prediksi (Opsional)
+- Menggunakan residual holdout model terpilih
+- Metode: quantile (empirical) atau normal (mean ± z * std)
+- Tidak selalu stabil jika residual sedikit (< 6–8 data)
+- Ditampilkan hanya di tabel (lower, upper)
+
+---
+
+## Mode Advanced
+Aktif bila dicentang:
+- Analisis APE (Absolute Percentage Error) per bulan holdout
+- Residual holdout semua model
+- Interval prediksi (jika residual tersedia)
+
+---
+
+## Prosedur Re-Train Rutin
+1. Tambahkan baris bulan terbaru ke data historis
+2. Jalankan ulang aplikasi
+3. Upload data terbaru
+4. Klik Latih Model
+5. Bandingkan skor baru dengan model_history.csv
+6. Jika MAPE naik drastis → investigasi (data anomali / pola baru)
+
+---
+
+## Ekspor Forecast
+Tombol "Download Forecast CSV" menghasilkan file (dua desimal), contoh:
+```csv
+periode,prediksi,lower,upper
+2025-07-01,1340.22,1295.10,1389.55
+...
+```
+Kolom lower/upper hanya ada jika interval diaktifkan.
+
+---
+
+## Menambahkan Fitur Baru (Opsional)
+- Tambah lag lain di config.toml (misal 6, 9)
+- Tambah rolling lain (24) jika historis cukup panjang
+- Tambah fitur event manual (misal bulan_ramadhan=1/0) di pipeline sebelum train
+- Regenerasi model → cek apakah MAPE turun
+
+---
+
+## Troubleshooting
+
+| Gejala | Penyebab Mungkin | Solusi |
+|--------|------------------|--------|
+| Error "Data terlalu sedikit" | Histori < holdout + kebutuhan lag | Kurangi holdout atau kumpulkan data tambahan |
+| MAPE tiba-tiba tinggi | Outlier / data salah input | Validasi ulang nilai bulan baru |
+| XGBoost gagal | Paket tidak terinstal / versi tak cocok | pip install xgboost, cek log artifact["xgboost_error"] |
+| Interval kosong | Residual kurang | Tambah siklus re-train dulu |
+| Semua forecast flat | Model naive terpilih | Pastikan seasonal dengan cukup data 12+ bulan atau gunakan blend |
+
+---
+
+## Perluasan Ke Depan (Roadmap Sederhana)
+- FastAPI endpoint /forecast
+- Rolling cross-validation untuk residual lebih kaya
+- Integrasi notifikasi (Slack/Email) saat MAPE > ambang
+- Quantile model khusus (pinball loss) untuk interval lebih akurat
+
+---
+
+## Menjalankan Tes (Jika Ditambahkan Nanti)
+Letakkan skrip test di folder tests/ lalu jalankan:
+```bash
+pytest -q
+```
+(Tidak wajib untuk versi awal ini.)
+
+---
+
+## Lisensi
+Tuliskan lisensi yang sesuai (misal MIT / internal).  
+Contoh placeholder:
+```
+Hak cipta © 2025 Disdukcapil Kota Bogor. Seluruh hak dilindungi.
+```
+
+---
+
+## Kontak / Pemelihara
+- Tim Data & Pengembangan Disdukcapil Kota Bogor
+- (Tambahkan email / kanal internal jika diperlukan)
+
+---
+
+Selamat menggunakan! Jika butuh README versi lebih ringkas atau bilingual (ID + EN), silakan ajukan.
