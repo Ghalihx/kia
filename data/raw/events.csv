@@ -1,6 +1,0 @@
-periode,event_name,event_type,intensity
-2023-02-01,target_percepatan_awal,percepatan_awal,1
-2024-01-01,target_percepatan_awal,percepatan_awal,1
-2024-09-01,target_percepatan_persiapan,percepatan_persiapan,0.8
-2024-10-01,target_percepatan_puncak,percepatan_puncak,1.2
-2025-02-01,target_percepatan_awal,percepatan_awal,1
