@@ -8,17 +8,59 @@ from typing import Dict, Any, List, Tuple
 import numpy as np
 import pandas as pd
 
-# Config loader (gunakan tomllib kalau Python >=3.11)
+# =====================================================
+# TOML loader (aman untuk Python 3.11 atau fallback)
+# =====================================================
+_DEFAULT_BASE_CONFIG: Dict[str, Any] = {
+    "data": {
+        "date_column": "periode",
+        "target_column": "permohonan_kia",
+        "lags": [1, 2, 3, 6, 12],
+        "rollings": [3, 6, 12],
+        "add_sin_cos": True,
+        "use_log_target": False,
+        "use_events": False,
+        "cap_outliers": False,
+        "outlier_method": "iqr",
+        "outlier_iqr_k": 1.5,
+        "event_file": "data/raw/events.csv",
+    },
+    "training": {
+        "holdout_months": 6,
+        "season_length": 12,
+        "cv_folds": 3,
+        "min_train_months": 18,
+        "blend_enable": True,
+        "early_stopping_rounds": 40,
+        "xgb": {
+            "eta": 0.05,
+            "max_depth": 4,
+            "n_rounds": 600,
+            "subsample": 0.9,
+            "colsample_bytree": 0.9
+        }
+    },
+    "forecast": {
+        "horizon": 6,
+        "max_horizon": 24
+    }
+}
+
+# Python 3.11+ tomllib
 try:
     import tomllib  # type: ignore
     def _read_toml(path: Path) -> Dict[str, Any]:
-        return tomllib.loads(path.read_bytes())
+        # gunakan load() dengan file binary agar sesuai spesifikasi
+        with path.open("rb") as f:
+            return tomllib.load(f)
 except ModuleNotFoundError:
+    # Fallback ke package toml (pip install toml)
     import toml  # type: ignore
     def _read_toml(path: Path) -> Dict[str, Any]:
         return toml.load(path.open("r", encoding="utf-8"))
 
-# Event utilities (optional). Jika file tidak ada, kita fallback.
+
+# Event utils optional
 try:
     from src.utils.events import load_events, merge_event_features
     _HAS_EVENT_UTILS = True
@@ -26,9 +68,6 @@ except Exception:
     _HAS_EVENT_UTILS = False
 
 
-# =========================
-# Public API (diekspos)
-# =========================
 __all__ = [
     "load_config",
     "train_pipeline",
@@ -37,45 +76,43 @@ __all__ = [
 ]
 
 
-# =========================
+# =====================================================
 # CONFIG
-# =========================
+# =====================================================
 def load_config(path: str | Path = "config.toml") -> dict:
     p = Path(path)
     if not p.exists():
-        # fallback minimal agar app tetap jalan
-        return {
-            "data": {
-                "date_column": "periode",
-                "target_column": "permohonan_kia",
-                "lags": [1, 2, 3, 6, 12],
-                "rollings": [3, 6, 12],
-                "add_sin_cos": True,
-                "use_log_target": False,
-                "use_events": False,
-                "cap_outliers": False
-            },
-            "training": {
-                "holdout_months": 6,
-                "season_length": 12,
-                "cv_folds": 3,
-                "min_train_months": 18,
-                "blend_enable": True,
-                "xgb": {
-                    "eta": 0.05,
-                    "max_depth": 4,
-                    "n_rounds": 500,
-                    "subsample": 0.9,
-                    "colsample_bytree": 0.9
-                }
-            }
-        }
-    return _read_toml(p)
+        return _DEFAULT_BASE_CONFIG.copy()
+    try:
+        cfg = _read_toml(p)
+        # Merge dengan default agar kunci baru tetap ada
+        merged = _merge_dicts(_DEFAULT_BASE_CONFIG, cfg)
+        return merged
+    except Exception as e:
+        warnings.warn(f"Gagal membaca config.toml: {e}. Menggunakan default.")
+        return _DEFAULT_BASE_CONFIG.copy()
 
 
-# =========================
+def _merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    out = {}
+    for k, v in base.items():
+        if k in override:
+            if isinstance(v, dict) and isinstance(override[k], dict):
+                out[k] = _merge_dicts(v, override[k])
+            else:
+                out[k] = override[k]
+        else:
+            out[k] = v
+    # kunci ekstra di override yang tidak ada di base
+    for k, v in override.items():
+        if k not in out:
+            out[k] = v
+    return out
+
+
+# =====================================================
 # METRICS
-# =========================
+# =====================================================
 def mape(y_true, y_pred) -> float:
     y_true = np.array(y_true, dtype=float)
     y_pred = np.array(y_pred, dtype=float)
@@ -105,16 +142,13 @@ def _smape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(np.mean(np.abs(y_true[mask] - y_pred[mask]) / denom) * 100)
 
 
-# =========================
+# =====================================================
 # BASELINE FORECASTERS
-# =========================
+# =====================================================
 def predict_naive_last(train_df: pd.DataFrame,
                        future_dates: List[pd.Timestamp],
                        date_col: str,
                        target_col: str) -> np.ndarray:
-    """
-    Naive last value repeated.
-    """
     if train_df.empty:
         return np.array([np.nan] * len(future_dates))
     last_val = float(train_df[target_col].iloc[-1])
@@ -126,15 +160,10 @@ def predict_seasonal_naive(train_df: pd.DataFrame,
                            date_col: str,
                            target_col: str,
                            season_length: int = 12) -> np.ndarray:
-    """
-    Seasonal naive: y_{t} = y_{t - season_length}.
-    Jika data belum cukup panjang, fallback ke naive_last.
-    """
     values = train_df.sort_values(date_col)[target_col].values.astype(float)
     if len(values) < season_length:
         return predict_naive_last(train_df, future_dates, date_col, target_col)
     result = []
-    # Simulasikan iteratif: ambil shift season_length ke belakang terhadap 'virtual' timeline
     hist = list(values)
     for _ in future_dates:
         if len(hist) >= season_length:
@@ -146,9 +175,9 @@ def predict_seasonal_naive(train_df: pd.DataFrame,
     return np.array(result, dtype=float)
 
 
-# =========================
+# =====================================================
 # OUTLIER HANDLING
-# =========================
+# =====================================================
 def _cap_outliers(series: pd.Series, method: str = "iqr", k: float = 1.5) -> pd.Series:
     s = series.copy()
     if method == "iqr":
@@ -167,9 +196,9 @@ def _cap_outliers(series: pd.Series, method: str = "iqr", k: float = 1.5) -> pd.
     return s
 
 
-# =========================
+# =====================================================
 # EXPANDING CV
-# =========================
+# =====================================================
 def _expanding_cv_indices(n: int, n_folds: int, min_train: int, horizon: int = 1):
     folds = []
     start_test = min_train
@@ -181,9 +210,9 @@ def _expanding_cv_indices(n: int, n_folds: int, min_train: int, horizon: int = 1
     return folds
 
 
-# =========================
+# =====================================================
 # FEATURE ENGINEERING
-# =========================
+# =====================================================
 def build_features(df: pd.DataFrame,
                    date_col: str,
                    target_col: str,
@@ -222,9 +251,9 @@ def build_features(df: pd.DataFrame,
     return feat
 
 
-# =========================
+# =====================================================
 # ARTIFACT I/O
-# =========================
+# =====================================================
 def save_artifact(artifact: Dict[str, Any],
                   out_dir: str = "models",
                   filename_prefix: str = "kia_forecast") -> Path:
@@ -243,9 +272,9 @@ def load_artifact(path_prefix: str) -> Dict[str, Any]:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
-# =========================
+# =====================================================
 # TRAIN PIPELINE
-# =========================
+# =====================================================
 def train_pipeline(df: pd.DataFrame, cfg: dict) -> Dict[str, Any]:
     data_cfg = cfg.get("data", {})
     train_cfg = cfg.get("training", {})
@@ -266,7 +295,6 @@ def train_pipeline(df: pd.DataFrame, cfg: dict) -> Dict[str, Any]:
     cv_folds = int(train_cfg.get("cv_folds", 3))
     min_train_months = int(train_cfg.get("min_train_months", 18))
 
-    # Validasi dasar
     if date_col not in df.columns or target_col not in df.columns:
         raise ValueError(f"Kolom {date_col}/{target_col} tidak ditemukan di data.")
 
@@ -280,13 +308,11 @@ def train_pipeline(df: pd.DataFrame, cfg: dict) -> Dict[str, Any]:
     if len(df) <= holdout_months + 6:
         raise ValueError("Data terlalu sedikit untuk holdout konfigurasi saat ini.")
 
-    # Outlier capping (opsional)
     if cap_outliers:
         df["_target_capped"] = _cap_outliers(df[target_col], method=outlier_method, k=outlier_iqr_k)
     else:
         df["_target_capped"] = df[target_col]
 
-    # Event merge (opsional)
     if use_events and _HAS_EVENT_UTILS:
         events_path = data_cfg.get("event_file", "data/raw/events.csv")
         try:
@@ -302,7 +328,6 @@ def train_pipeline(df: pd.DataFrame, cfg: dict) -> Dict[str, Any]:
         df["event_flag"] = 0
         df["event_intensity"] = 0.0
 
-    # Kolom fit (bisa log)
     df["_fit_target"] = df["_target_capped"]
     if use_log:
         df["_fit_target_log"] = np.log1p(df["_fit_target"])
@@ -310,13 +335,11 @@ def train_pipeline(df: pd.DataFrame, cfg: dict) -> Dict[str, Any]:
     else:
         fit_col = "_fit_target"
 
-    # Split train/holdout
     train_df = df.iloc[:-holdout_months].copy()
     test_df = df.iloc[-holdout_months:].copy()
     test_dates = list(test_df[date_col])
     y_test_actual = test_df[target_col].astype(float).values
 
-    # Build fitur untuk seluruh timeline pada basis fit_col
     feat_all = build_features(
         df[[date_col, fit_col]].rename(columns={fit_col: target_col}),
         date_col, target_col, lags, rollings, add_sin_cos
@@ -333,7 +356,7 @@ def train_pipeline(df: pd.DataFrame, cfg: dict) -> Dict[str, Any]:
     y_test = feat_test[target_col].astype(float).values
 
     artifact: Dict[str, Any] = {
-        "schema_version": "1.2.1",
+        "schema_version": "1.2.2",
         "model_name": None,
         "scores": {},
         "holdout_dates": [d.isoformat() for d in test_dates],
@@ -354,7 +377,7 @@ def train_pipeline(df: pd.DataFrame, cfg: dict) -> Dict[str, Any]:
         "use_events": use_events
     }
 
-    # -------------- Baseline: Naive --------------
+    # ========== Baseline Naive ==========
     naive_pred = predict_naive_last(
         train_df.rename(columns={fit_col: target_col}),
         test_dates, date_col, fit_col if use_log else target_col
@@ -369,7 +392,7 @@ def train_pipeline(df: pd.DataFrame, cfg: dict) -> Dict[str, Any]:
     artifact["holdout_preds"]["naive"] = {"y_pred": naive_pred.tolist()}
     artifact["holdout_residuals"]["naive"] = (y_test_actual - naive_pred).tolist()
 
-    # -------------- Baseline: Seasonal Naive --------------
+    # ========== Baseline Seasonal Naive ==========
     if len(df) > season_length + holdout_months:
         sn_pred = predict_seasonal_naive(
             train_df.rename(columns={fit_col: target_col}),
@@ -385,10 +408,9 @@ def train_pipeline(df: pd.DataFrame, cfg: dict) -> Dict[str, Any]:
         artifact["holdout_preds"]["seasonal_naive"] = {"y_pred": sn_pred.tolist()}
         artifact["holdout_residuals"]["seasonal_naive"] = (y_test_actual - sn_pred).tolist()
 
-    # -------------- XGBoost --------------
-    xgb_pred = None
+    # ========== XGBoost ==========
     try:
-        import xgboost as xgb  # pastikan xgboost ada di requirements
+        import xgboost as xgb  # pastikan di requirements
         xgb_cfg = train_cfg.get("xgb", {})
         params = {
             "objective": "reg:squarederror",
@@ -425,7 +447,6 @@ def train_pipeline(df: pd.DataFrame, cfg: dict) -> Dict[str, Any]:
                 y_val_actual = y_train[va_idx]
             cv_mapes.append(mape(y_val_actual, pred_cv))
 
-        # Train final
         dtrain_full = xgb.DMatrix(X_train, label=y_train, feature_names=X_cols)
         dtest = xgb.DMatrix(X_test, label=y_test, feature_names=X_cols)
         booster = xgb.train(
@@ -447,12 +468,11 @@ def train_pipeline(df: pd.DataFrame, cfg: dict) -> Dict[str, Any]:
         artifact["holdout_preds"]["xgboost"] = {"y_pred": xgb_pred.tolist()}
         artifact["holdout_residuals"]["xgboost"] = (y_test_actual - xgb_pred).tolist()
         artifact["xgb_model_raw"] = booster.save_raw().decode("latin1", errors="ignore")
-
     except Exception as e:
         warnings.warn(f"XGBoost gagal: {e}")
         artifact["xgboost_error"] = f"XGBoost gagal: {e}"
 
-    # -------------- Blend --------------
+    # ========== Blend ==========
     if train_cfg.get("blend_enable", True):
         components = [m for m in ["xgboost", "seasonal_naive", "naive"] if m in artifact["holdout_preds"]]
         if len(components) >= 2:
@@ -461,7 +481,6 @@ def train_pipeline(df: pd.DataFrame, cfg: dict) -> Dict[str, Any]:
                 for m in components
             }
             best = (None, 1e18, None)
-            # Grid 0..1 step 0.1 untuk maksimal 3 model
             if len(components) == 2:
                 A, B = components
                 for w in np.linspace(0, 1, 21):
@@ -474,6 +493,8 @@ def train_pipeline(df: pd.DataFrame, cfg: dict) -> Dict[str, Any]:
                 for w1 in np.linspace(0, 1, 11):
                     for w2 in np.linspace(0, 1 - w1, 11):
                         w3 = 1 - w1 - w2
+                        if w3 < -1e-9:
+                            continue
                         blend = (
                             w1 * preds_dict[A] +
                             w2 * preds_dict[B] +
@@ -493,7 +514,7 @@ def train_pipeline(df: pd.DataFrame, cfg: dict) -> Dict[str, Any]:
                 artifact["holdout_residuals"]["blend"] = (y_test_actual - best[2]).tolist()
                 artifact["blend_weight_final"] = best[0]
 
-    # -------------- Model Selection --------------
+    # ========== Model Selection ==========
     ranking = []
     for m_name, sc in artifact["scores"].items():
         val = sc.get("MAPE")
