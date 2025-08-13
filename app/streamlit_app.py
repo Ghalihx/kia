@@ -9,19 +9,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import traceback
-
-# === DEBUG IMPORT TRAIN (temp) ===
-try:
-    import src.models.train as _train_debug
-except Exception:
-    import streamlit as st
-    st.error("DEBUG: Import src.models.train gagal. Stacktrace di bawah:")
-    st.code("".join(traceback.format_exc()))
-    st.stop()
-# === END DEBUG BLOCK ===
-
-from src.models.train import load_config, train_pipeline, save_artifact
 
 from src.models.train import load_config, train_pipeline, save_artifact
 from src.models.infer import (
@@ -327,4 +314,3 @@ if predict_button:
         )
     except Exception as e:
         st.error(f"Gagal melakukan prediksi: {e}")
-
