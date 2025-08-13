@@ -15,6 +15,12 @@ from typing import Tuple
 from src.utils.events import load_events, merge_event_features  # baru (pastikan __init__.py ada)
 import warnings
 
+def load_config(path: str | Path = "config.toml") -> dict:
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"Config file tidak ditemukan: {p}")
+    return toml.load(p.open("r", encoding="utf-8"))
+    
 def _cap_outliers(series: pd.Series, method: str = "iqr", k: float = 1.5) -> pd.Series:
     s = series.copy()
     if method == "iqr":
@@ -336,3 +342,4 @@ def train_pipeline(df: pd.DataFrame, cfg: dict) -> Dict[str, Any]:
         artifact["model_name"] = "naive"
 
     return artifact
+
