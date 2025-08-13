@@ -1,14 +1,27 @@
 [data]
 date_column = "periode"
 target_column = "permohonan_kia"
-lags = [1, 2, 3, 12]
-rollings = [3, 6, 12]
+lags = [1,2,3,6,12]
+rollings = [3,6,12]
 add_sin_cos = true
+use_log_target = true          # baru
+use_events = true              # baru
+event_file = "data/raw/events.csv"
+cap_outliers = true            # baru
+outlier_method = "iqr"         # iqr | zscore | none
+outlier_iqr_k = 1.5
 
 [training]
 holdout_months = 6
 season_length = 12
-
-[forecast]
-horizon = 6
-max_horizon = 24
+cv_folds = 4                   # expanding folds dalam train portion
+min_train_months = 18
+blend_enable = true
+blend_include_naive = true
+early_stopping_rounds = 40
+xgb:
+  eta = 0.05
+  max_depth = 4
+  n_rounds = 800
+  subsample = 0.9
+  colsample_bytree = 0.9
