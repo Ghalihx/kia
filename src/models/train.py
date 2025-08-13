@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 import warnings
 from pathlib import Path
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List
 
 import numpy as np
 import pandas as pd
 
 # =====================================================
-# TOML loader (aman untuk Python 3.11 atau fallback)
+# DEFAULT CONFIG
 # =====================================================
 _DEFAULT_BASE_CONFIG: Dict[str, Any] = {
     "data": {
@@ -46,27 +46,29 @@ _DEFAULT_BASE_CONFIG: Dict[str, Any] = {
     }
 }
 
-# Python 3.11+ tomllib
+# =====================================================
+# TOML loader (aman Python 3.11+ atau fallback)
+# =====================================================
 try:
     import tomllib  # type: ignore
+
     def _read_toml(path: Path) -> Dict[str, Any]:
-        # gunakan load() dengan file binary agar sesuai spesifikasi
         with path.open("rb") as f:
             return tomllib.load(f)
 except ModuleNotFoundError:
-    # Fallback ke package toml (pip install toml)
     import toml  # type: ignore
+
     def _read_toml(path: Path) -> Dict[str, Any]:
         return toml.load(path.open("r", encoding="utf-8"))
 
-
-# Event utils optional
+# =====================================================
+# Event utils (opsional)
+# =====================================================
 try:
     from src.utils.events import load_events, merge_event_features
     _HAS_EVENT_UTILS = True
 except Exception:
     _HAS_EVENT_UTILS = False
-
 
 __all__ = [
     "load_config",
@@ -75,24 +77,9 @@ __all__ = [
     "load_artifact"
 ]
 
-
 # =====================================================
 # CONFIG
 # =====================================================
-def load_config(path: str | Path = "config.toml") -> dict:
-    p = Path(path)
-    if not p.exists():
-        return _DEFAULT_BASE_CONFIG.copy()
-    try:
-        cfg = _read_toml(p)
-        # Merge dengan default agar kunci baru tetap ada
-        merged = _merge_dicts(_DEFAULT_BASE_CONFIG, cfg)
-        return merged
-    except Exception as e:
-        warnings.warn(f"Gagal membaca config.toml: {e}. Menggunakan default.")
-        return _DEFAULT_BASE_CONFIG.copy()
-
-
 def _merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
     out = {}
     for k, v in base.items():
@@ -103,12 +90,21 @@ def _merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, An
                 out[k] = override[k]
         else:
             out[k] = v
-    # kunci ekstra di override yang tidak ada di base
     for k, v in override.items():
         if k not in out:
             out[k] = v
     return out
 
+def load_config(path: str | Path = "config.toml") -> dict:
+    p = Path(path)
+    if not p.exists():
+        return _DEFAULT_BASE_CONFIG.copy()
+    try:
+        cfg = _read_toml(p)
+        return _merge_dicts(_DEFAULT_BASE_CONFIG, cfg)
+    except Exception as e:
+        warnings.warn(f"Gagal membaca config.toml: {e}. Menggunakan default.")
+        return _DEFAULT_BASE_CONFIG.copy()
 
 # =====================================================
 # METRICS
@@ -121,7 +117,6 @@ def mape(y_true, y_pred) -> float:
         return np.nan
     return float(np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100.0)
 
-
 def rmse(y_true, y_pred) -> float:
     y_true = np.array(y_true, dtype=float)
     y_pred = np.array(y_pred, dtype=float)
@@ -129,7 +124,6 @@ def rmse(y_true, y_pred) -> float:
     if not mask.any():
         return np.nan
     return float(np.sqrt(np.mean((y_true[mask] - y_pred[mask]) ** 2)))
-
 
 def _smape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     y_true = np.array(y_true, dtype=float)
@@ -141,42 +135,46 @@ def _smape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     denom = np.where(denom == 0, 1, denom)
     return float(np.mean(np.abs(y_true[mask] - y_pred[mask]) / denom) * 100)
 
-
 # =====================================================
-# BASELINE FORECASTERS
+# BASELINE (array based, hindari masalah DataFrame duplikat kolom)
 # =====================================================
-def predict_naive_last(train_df: pd.DataFrame,
-                       future_dates: List[pd.Timestamp],
-                       date_col: str,
-                       target_col: str) -> np.ndarray:
-    if train_df.empty:
-        return np.array([np.nan] * len(future_dates))
-    last_val = float(train_df[target_col].iloc[-1])
-    return np.array([last_val] * len(future_dates), dtype=float)
-
-
-def predict_seasonal_naive(train_df: pd.DataFrame,
-                           future_dates: List[pd.Timestamp],
-                           date_col: str,
-                           target_col: str,
-                           season_length: int = 12) -> np.ndarray:
-    values = train_df.sort_values(date_col)[target_col].values.astype(float)
-    if len(values) < season_length:
-        return predict_naive_last(train_df, future_dates, date_col, target_col)
-    result = []
-    hist = list(values)
-    for _ in future_dates:
-        if len(hist) >= season_length:
-            val = hist[-season_length]
+def naive_recursive_last(train_values: np.ndarray, test_values: np.ndarray) -> np.ndarray:
+    """
+    Multi-step one-by-one naive:
+    Prediksi bulan t = nilai aktual bulan t-1 (actual already known in sequential evaluation).
+    """
+    preds = []
+    hist = list(train_values)
+    for actual in test_values:
+        if len(hist) == 0:
+            preds.append(np.nan)
         else:
-            val = hist[-1]
-        result.append(float(val))
-        hist.append(val)
-    return np.array(result, dtype=float)
+            preds.append(hist[-1])
+        # Append actual (karena evaluasi 1-step ahead bergulir)
+        hist.append(actual)
+    return np.array(preds, dtype=float)
 
+def seasonal_recursive_last(train_values: np.ndarray,
+                            test_values: np.ndarray,
+                            season_length: int) -> np.ndarray:
+    """
+    Seasonal naive iterative:
+    Prediksi t = nilai aktual t - season_length (dari hist yang ter-update).
+    """
+    preds = []
+    hist = list(train_values)
+    for actual in test_values:
+        if len(hist) >= season_length:
+            preds.append(hist[-season_length])
+        elif len(hist) > 0:
+            preds.append(hist[-1])
+        else:
+            preds.append(np.nan)
+        hist.append(actual)
+    return np.array(preds, dtype=float)
 
 # =====================================================
-# OUTLIER HANDLING
+# OUTLIER
 # =====================================================
 def _cap_outliers(series: pd.Series, method: str = "iqr", k: float = 1.5) -> pd.Series:
     s = series.copy()
@@ -195,7 +193,6 @@ def _cap_outliers(series: pd.Series, method: str = "iqr", k: float = 1.5) -> pd.
         return s.where(z.abs() <= k, m + np.sign(z) * k * std)
     return s
 
-
 # =====================================================
 # EXPANDING CV
 # =====================================================
@@ -208,7 +205,6 @@ def _expanding_cv_indices(n: int, n_folds: int, min_train: int, horizon: int = 1
         folds.append((train_idx, test_idx))
         start_test += horizon
     return folds
-
 
 # =====================================================
 # FEATURE ENGINEERING
@@ -250,7 +246,6 @@ def build_features(df: pd.DataFrame,
 
     return feat
 
-
 # =====================================================
 # ARTIFACT I/O
 # =====================================================
@@ -264,13 +259,11 @@ def save_artifact(artifact: Dict[str, Any],
         json.dump(artifact, f, ensure_ascii=False, indent=2)
     return file_path
 
-
 def load_artifact(path_prefix: str) -> Dict[str, Any]:
     p = Path(f"{path_prefix}.json")
     if not p.exists():
         raise FileNotFoundError(f"Artifact tidak ditemukan: {p}")
     return json.loads(p.read_text(encoding="utf-8"))
-
 
 # =====================================================
 # TRAIN PIPELINE
@@ -295,24 +288,30 @@ def train_pipeline(df: pd.DataFrame, cfg: dict) -> Dict[str, Any]:
     cv_folds = int(train_cfg.get("cv_folds", 3))
     min_train_months = int(train_cfg.get("min_train_months", 18))
 
+    # Validasi kolom
     if date_col not in df.columns or target_col not in df.columns:
         raise ValueError(f"Kolom {date_col}/{target_col} tidak ditemukan di data.")
 
+    # Tipe & NaN
     df[target_col] = pd.to_numeric(df[target_col], errors="coerce")
     if not np.issubdtype(df[date_col].dtype, np.datetime64):
         df[date_col] = pd.to_datetime(df[date_col])
     if df[target_col].isna().any():
         raise ValueError("Ada nilai target NaN – bersihkan dulu.")
 
+    # Urutkan
     df = df.sort_values(date_col).reset_index(drop=True)
-    if len(df) <= holdout_months + 6:
-        raise ValueError("Data terlalu sedikit untuk holdout konfigurasi saat ini.")
 
+    if len(df) <= holdout_months + 6:
+        raise ValueError("Data terlalu sedikit untuk konfigurasi holdout saat ini.")
+
+    # Outlier capping
     if cap_outliers:
         df["_target_capped"] = _cap_outliers(df[target_col], method=outlier_method, k=outlier_iqr_k)
     else:
         df["_target_capped"] = df[target_col]
 
+    # Event merge
     if use_events and _HAS_EVENT_UTILS:
         events_path = data_cfg.get("event_file", "data/raw/events.csv")
         try:
@@ -328,6 +327,7 @@ def train_pipeline(df: pd.DataFrame, cfg: dict) -> Dict[str, Any]:
         df["event_flag"] = 0
         df["event_intensity"] = 0.0
 
+    # Kolom fit (bisa log)
     df["_fit_target"] = df["_target_capped"]
     if use_log:
         df["_fit_target_log"] = np.log1p(df["_fit_target"])
@@ -335,11 +335,43 @@ def train_pipeline(df: pd.DataFrame, cfg: dict) -> Dict[str, Any]:
     else:
         fit_col = "_fit_target"
 
+    # Split
     train_df = df.iloc[:-holdout_months].copy()
     test_df = df.iloc[-holdout_months:].copy()
     test_dates = list(test_df[date_col])
     y_test_actual = test_df[target_col].astype(float).values
 
+    # ================= BASELINES =================
+    full_values = df[target_col].values.astype(float)
+    train_values = full_values[:-holdout_months]
+    test_values = full_values[-holdout_months:]
+
+    # Naive recursive one-step
+    naive_pred = naive_recursive_last(train_values, test_values)
+    artifact_scores: Dict[str, Any] = {}
+    holdout_preds: Dict[str, Any] = {}
+    holdout_residuals: Dict[str, Any] = {}
+
+    artifact_scores["naive"] = {
+        "MAPE": mape(y_test_actual, naive_pred),
+        "RMSE": rmse(y_test_actual, naive_pred),
+        "sMAPE": _smape(y_test_actual, naive_pred)
+    }
+    holdout_preds["naive"] = {"y_pred": naive_pred.tolist()}
+    holdout_residuals["naive"] = (y_test_actual - naive_pred).tolist()
+
+    # Seasonal naive (jika cukup panjang)
+    if len(train_values) >= season_length:
+        seasonal_pred = seasonal_recursive_last(train_values, test_values, season_length)
+        artifact_scores["seasonal_naive"] = {
+            "MAPE": mape(y_test_actual, seasonal_pred),
+            "RMSE": rmse(y_test_actual, seasonal_pred),
+            "sMAPE": _smape(y_test_actual, seasonal_pred)
+        }
+        holdout_preds["seasonal_naive"] = {"y_pred": seasonal_pred.tolist()}
+        holdout_residuals["seasonal_naive"] = (y_test_actual - seasonal_pred).tolist()
+
+    # ================= FITUR untuk MODEL ML =================
     feat_all = build_features(
         df[[date_col, fit_col]].rename(columns={fit_col: target_col}),
         date_col, target_col, lags, rollings, add_sin_cos
@@ -352,63 +384,12 @@ def train_pipeline(df: pd.DataFrame, cfg: dict) -> Dict[str, Any]:
     X_cols = [c for c in feat_train.columns if c not in [date_col, target_col]]
     X_train = feat_train[X_cols].fillna(0).values
     X_test = feat_test[X_cols].fillna(0).values
-    y_train = feat_train[target_col].astype(float).values
-    y_test = feat_test[target_col].astype(float).values
+    y_train_fit = feat_train[target_col].astype(float).values  # bisa log jika use_log
+    y_test_fit = feat_test[target_col].astype(float).values
 
-    artifact: Dict[str, Any] = {
-        "schema_version": "1.2.2",
-        "model_name": None,
-        "scores": {},
-        "holdout_dates": [d.isoformat() for d in test_dates],
-        "holdout_y_actual": y_test_actual.tolist(),
-        "holdout_preds": {},
-        "holdout_residuals": {},
-        "feature_columns": X_cols,
-        "cutoff_date": str(train_df[date_col].max().date()),
-        "train_rows": len(train_df),
-        "test_rows": len(test_df),
-        "holdout_months": holdout_months,
-        "blend_weight_final": None,
-        "xgboost_error": None,
-        "xgb_model_raw": None,
-        "date_column": date_col,
-        "target_column": target_col,
-        "use_log_target": use_log,
-        "use_events": use_events
-    }
-
-    # ========== Baseline Naive ==========
-    naive_pred = predict_naive_last(
-        train_df.rename(columns={fit_col: target_col}),
-        test_dates, date_col, fit_col if use_log else target_col
-    )
-    if use_log:
-        naive_pred = np.expm1(naive_pred)
-    artifact["scores"]["naive"] = {
-        "MAPE": mape(y_test_actual, naive_pred),
-        "RMSE": rmse(y_test_actual, naive_pred),
-        "sMAPE": _smape(y_test_actual, naive_pred)
-    }
-    artifact["holdout_preds"]["naive"] = {"y_pred": naive_pred.tolist()}
-    artifact["holdout_residuals"]["naive"] = (y_test_actual - naive_pred).tolist()
-
-    # ========== Baseline Seasonal Naive ==========
-    if len(df) > season_length + holdout_months:
-        sn_pred = predict_seasonal_naive(
-            train_df.rename(columns={fit_col: target_col}),
-            test_dates, date_col, fit_col if use_log else target_col, season_length
-        )
-        if use_log:
-            sn_pred = np.expm1(sn_pred)
-        artifact["scores"]["seasonal_naive"] = {
-            "MAPE": mape(y_test_actual, sn_pred),
-            "RMSE": rmse(y_test_actual, sn_pred),
-            "sMAPE": _smape(y_test_actual, sn_pred)
-        }
-        artifact["holdout_preds"]["seasonal_naive"] = {"y_pred": sn_pred.tolist()}
-        artifact["holdout_residuals"]["seasonal_naive"] = (y_test_actual - sn_pred).tolist()
-
-    # ========== XGBoost ==========
+    # ================= XGBoost =================
+    xgb_pred_actual_scale = None
+    xgb_error = None
     try:
         import xgboost as xgb  # pastikan di requirements
         xgb_cfg = train_cfg.get("xgb", {})
@@ -421,16 +402,17 @@ def train_pipeline(df: pd.DataFrame, cfg: dict) -> Dict[str, Any]:
             "seed": 42
         }
 
+        # Expanding CV dalam train portion
         fold_indices = _expanding_cv_indices(
             n=len(feat_train),
-            n_folds=cv_folds,
-            min_train=min_train_months,
+            n_folds=train_cfg.get("cv_folds", 3),
+            min_train=train_cfg.get("min_train_months", 18),
             horizon=1
         )
         cv_mapes: List[float] = []
         for tr_idx, va_idx in fold_indices:
-            dtr = xgb.DMatrix(X_train[tr_idx], label=y_train[tr_idx], feature_names=X_cols)
-            dva = xgb.DMatrix(X_train[va_idx], label=y_train[va_idx], feature_names=X_cols)
+            dtr = xgb.DMatrix(X_train[tr_idx], label=y_train_fit[tr_idx], feature_names=X_cols)
+            dva = xgb.DMatrix(X_train[va_idx], label=y_train_fit[va_idx], feature_names=X_cols)
             booster_cv = xgb.train(
                 params,
                 dtr,
@@ -441,14 +423,15 @@ def train_pipeline(df: pd.DataFrame, cfg: dict) -> Dict[str, Any]:
             )
             pred_cv = booster_cv.predict(dva)
             if use_log:
-                pred_cv = np.expm1(pred_cv)
-                y_val_actual = np.expm1(y_train[va_idx]) if fit_col.endswith("_log") else y_train[va_idx]
+                pred_cv_actual = np.expm1(pred_cv)
+                y_val_actual = np.expm1(y_train_fit[va_idx])
             else:
-                y_val_actual = y_train[va_idx]
-            cv_mapes.append(mape(y_val_actual, pred_cv))
+                pred_cv_actual = pred_cv
+                y_val_actual = y_train_fit[va_idx]
+            cv_mapes.append(mape(y_val_actual, pred_cv_actual))
 
-        dtrain_full = xgb.DMatrix(X_train, label=y_train, feature_names=X_cols)
-        dtest = xgb.DMatrix(X_test, label=y_test, feature_names=X_cols)
+        dtrain_full = xgb.DMatrix(X_train, label=y_train_fit, feature_names=X_cols)
+        dtest = xgb.DMatrix(X_test, label=y_test_fit, feature_names=X_cols)
         booster = xgb.train(
             params,
             dtrain_full,
@@ -457,29 +440,27 @@ def train_pipeline(df: pd.DataFrame, cfg: dict) -> Dict[str, Any]:
             verbose_eval=False
         )
         raw_pred = booster.predict(dtest)
-        xgb_pred = np.expm1(raw_pred) if use_log else raw_pred
+        xgb_pred_actual_scale = np.expm1(raw_pred) if use_log else raw_pred
 
-        artifact["scores"]["xgboost"] = {
-            "MAPE": mape(y_test_actual, xgb_pred),
-            "RMSE": rmse(y_test_actual, xgb_pred),
-            "sMAPE": _smape(y_test_actual, xgb_pred),
+        artifact_scores["xgboost"] = {
+            "MAPE": mape(y_test_actual, xgb_pred_actual_scale),
+            "RMSE": rmse(y_test_actual, xgb_pred_actual_scale),
+            "sMAPE": _smape(y_test_actual, xgb_pred_actual_scale),
             "CV_MAPE_mean": float(np.mean(cv_mapes)) if cv_mapes else None
         }
-        artifact["holdout_preds"]["xgboost"] = {"y_pred": xgb_pred.tolist()}
-        artifact["holdout_residuals"]["xgboost"] = (y_test_actual - xgb_pred).tolist()
-        artifact["xgb_model_raw"] = booster.save_raw().decode("latin1", errors="ignore")
+        holdout_preds["xgboost"] = {"y_pred": xgb_pred_actual_scale.tolist()}
+        holdout_residuals["xgboost"] = (y_test_actual - xgb_pred_actual_scale).tolist()
+        xgb_model_raw = booster.save_raw().decode("latin1", errors="ignore")
     except Exception as e:
-        warnings.warn(f"XGBoost gagal: {e}")
-        artifact["xgboost_error"] = f"XGBoost gagal: {e}"
+        xgb_error = f"XGBoost gagal: {e}"
+        warnings.warn(xgb_error)
+        xgb_model_raw = None
 
-    # ========== Blend ==========
+    # ================= BLEND =================
     if train_cfg.get("blend_enable", True):
-        components = [m for m in ["xgboost", "seasonal_naive", "naive"] if m in artifact["holdout_preds"]]
+        components = [m for m in ["xgboost", "seasonal_naive", "naive"] if m in holdout_preds]
         if len(components) >= 2:
-            preds_dict = {
-                m: np.array(artifact["holdout_preds"][m]["y_pred"], dtype=float)
-                for m in components
-            }
+            preds_dict = {m: np.array(holdout_preds[m]["y_pred"], dtype=float) for m in components}
             best = (None, 1e18, None)
             if len(components) == 2:
                 A, B = components
@@ -495,35 +476,49 @@ def train_pipeline(df: pd.DataFrame, cfg: dict) -> Dict[str, Any]:
                         w3 = 1 - w1 - w2
                         if w3 < -1e-9:
                             continue
-                        blend = (
-                            w1 * preds_dict[A] +
-                            w2 * preds_dict[B] +
-                            w3 * preds_dict[C]
-                        )
+                        blend = w1 * preds_dict[A] + w2 * preds_dict[B] + w3 * preds_dict[C]
                         mm = mape(y_test_actual, blend)
                         if mm < best[1]:
                             best = ({"w_"+A: w1, "w_"+B: w2, "w_"+C: w3}, mm, blend)
             if best[0]:
-                artifact["scores"]["blend"] = {
+                artifact_scores["blend"] = {
                     "MAPE": best[1],
                     "RMSE": rmse(y_test_actual, best[2]),
                     "sMAPE": _smape(y_test_actual, best[2]),
                     "weights": best[0]
                 }
-                artifact["holdout_preds"]["blend"] = {"y_pred": best[2].tolist()}
-                artifact["holdout_residuals"]["blend"] = (y_test_actual - best[2]).tolist()
-                artifact["blend_weight_final"] = best[0]
+                holdout_preds["blend"] = {"y_pred": best[2].tolist()}
+                holdout_residuals["blend"] = (y_test_actual - best[2]).tolist()
 
-    # ========== Model Selection ==========
+    # ================= Seleksi model =================
     ranking = []
-    for m_name, sc in artifact["scores"].items():
+    for m_name, sc in artifact_scores.items():
         val = sc.get("MAPE")
         if val is not None and not np.isnan(val):
             ranking.append((m_name, val))
-    if ranking:
-        ranking.sort(key=lambda x: x[1])
-        artifact["model_name"] = ranking[0][0]
-    else:
-        artifact["model_name"] = "naive"
+    ranking.sort(key=lambda x: x[1])
+    best_model = ranking[0][0] if ranking else "naive"
+
+    artifact: Dict[str, Any] = {
+        "schema_version": "1.3.0",
+        "model_name": best_model,
+        "scores": artifact_scores,
+        "holdout_dates": [d.isoformat() for d in test_dates],
+        "holdout_y_actual": y_test_actual.tolist(),
+        "holdout_preds": holdout_preds,
+        "holdout_residuals": holdout_residuals,
+        "feature_columns": X_cols,
+        "cutoff_date": str(train_df[date_col].max().date()),
+        "train_rows": len(train_df),
+        "test_rows": len(test_df),
+        "holdout_months": holdout_months,
+        "blend_weight_final": artifact_scores.get("blend", {}).get("weights"),
+        "xgboost_error": xgb_error,
+        "xgb_model_raw": xgb_model_raw,
+        "date_column": date_col,
+        "target_column": target_col,
+        "use_log_target": use_log,
+        "use_events": use_events
+    }
 
     return artifact
