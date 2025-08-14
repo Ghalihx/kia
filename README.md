@@ -25,8 +25,7 @@ Aplikasi ini membantu memprediksi jumlah Permohonan Kartu Identitas Anak (KIA) b
 .
 ├─ app/
 │  └─ streamlit_app.py
-├─ config/
-│  └─ config.toml
+├─ config.toml
 ├─ data/
 │  ├─ README.md
 │  └─ sample_kia.csv
@@ -274,3 +273,4 @@ Hak cipta © 2025 Disdukcapil Kota Bogor. Seluruh hak dilindungi.
 ---
 
 Selamat menggunakan! Jika butuh README versi lebih ringkas atau bilingual (ID + EN), silakan ajukan.
+
