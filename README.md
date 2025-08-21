@@ -1,5 +1,5 @@
-# Sistem Prediksi Permohonan KIA  
-Disdukcapil Kota Bogor
+# Sistem Prediksi Permohonan Kartu Identitas Anak (KIA) 
+Disdukcapil Kota Bogor dan Universitas Djuanda Bogor
 
 Aplikasi ini membantu memprediksi jumlah Permohonan Kartu Identitas Anak (KIA) beberapa bulan ke depan menggunakan kombinasi model time series sederhana (naive, seasonal naive), model XGBoost, dan model blend (kombinasi teroptimasi dari dua model terbaik). Antarmuka disajikan melalui Streamlit agar mudah digunakan oleh pengguna non-teknis.
 
@@ -240,37 +240,11 @@ Kolom lower/upper hanya ada jika interval diaktifkan.
 
 ---
 
-## Perluasan Ke Depan (Roadmap Sederhana)
-- FastAPI endpoint /forecast
-- Rolling cross-validation untuk residual lebih kaya
-- Integrasi notifikasi (Slack/Email) saat MAPE > ambang
-- Quantile model khusus (pinball loss) untuk interval lebih akurat
-
----
-
-## Menjalankan Tes (Jika Ditambahkan Nanti)
-Letakkan skrip test di folder tests/ lalu jalankan:
-```bash
-pytest -q
-```
-(Tidak wajib untuk versi awal ini.)
-
----
-
-## Lisensi
-Tuliskan lisensi yang sesuai (misal MIT / internal).  
-Contoh placeholder:
-```
-Hak cipta © 2025 Disdukcapil Kota Bogor. Seluruh hak dilindungi.
-```
-
----
-
 ## Kontak / Pemelihara
-- Tim Data & Pengembangan Disdukcapil Kota Bogor
-- (Tambahkan email / kanal internal jika diperlukan)
+- ghalihputra8@gmail.com
 
 ---
 
-Selamat menggunakan! Jika butuh README versi lebih ringkas atau bilingual (ID + EN), silakan ajukan.
+Selamat menggunakan!
+
 
