@@ -1,0 +1,98 @@
+# Sistem Prediksi Permohonan Kartu Identitas Anak (KIA)
+Disdukcapil Kota Bogor x Universitas Djuanda Bogor
+
+---
+
+## Tentang Aplikasi
+
+Aplikasi ini membantu Disdukcapil Kota Bogor dalam memprediksi jumlah permohonan KIA beberapa bulan ke depan. Prediksi dilakukan dengan gabungan metode time series sederhana dan machine learning (XGBoost), lalu dipilih hasil terbaik secara otomatis. Aplikasi dibuat agar mudah digunakan siapa saja, cukup upload file data bulanan, klik, dan hasil langsung keluar.
+
+---
+
+## Fitur Utama
+
+- Upload data historis permohonan KIA (format Excel/CSV sederhana)
+- Validasi otomatis data (tanggal, angka)
+- Pelatihan model cepat, evaluasi akurasi
+- Prediksi beberapa bulan ke depan, bisa diunduh ke Excel/CSV
+- Analisis lebih detail (kesalahan prediksi, interval) di mode lanjutan
+- Riwayat pelatihan tersimpan, jadi bisa dibandingkan hasil sebelumnya
+
+---
+
+## Cara Instalasi & Pakai
+
+1. Siapkan komputer dengan Python 3.10+ (bisa tanya admin IT)
+2. Masuk ke folder aplikasi misal: C:\Users\USER\kia
+3. Buka terminal/CMD, jalankan:
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+4. Jalankan aplikasi:
+
+```bash
+streamlit run app/streamlit_app.py
+```
+
+5. Buka browser (Chrome/Edge) ke alamat yang muncul (biasanya http://localhost:8501)
+
+---
+
+## Cara Input Data
+
+- Format file: CSV/Excel dua kolom: periode, permohonan_kia
+- Contoh baris:
+```
+periode,permohonan_kia
+2023-01-01,980
+2023-02-01,1005
+2023-03-01,995
+```
+- Tidak boleh ada duplikat atau bulan kosong di tengah
+- Data harus berurutan waktu
+
+---
+
+## Langkah Pemakaian di Aplikasi
+
+1. Upload file data bulanan permohonan KIA
+2. Klik "Latih Model" untuk proses analisa dan pelatihan
+3. Lihat hasil akurasi (MAPE/RMSE) dan model terbaik
+4. Klik "Prediksi ke Depan" untuk melihat hasil forecast beberapa bulan ke depan
+5. Jika perlu, aktifkan "Mode Advanced" untuk analisa lebih dalam
+6. Download hasil prediksi ke Excel/CSV
+
+---
+
+## Kesimpulan & Pengembangan Lanjutan
+
+Aplikasi ini dirancang agar mudah digunakan staf Disdukcapil tanpa perlu paham teknis data science. Model yang dipakai sudah cukup untuk pola bulanan KIA, namun ke depan bisa dikembangkan untuk:
+
+- Prediksi jenis layanan lain: KTP-el, Akta Kelahiran, Pindah Datang, dll.
+- Integrasi data dari sistem Disdukcapil langsung (otomatis update)
+- Penambahan fitur prediksi musiman khusus (misal selama PPDB, Ramadan, dll.)
+- Analisis tren tahunan, deteksi anomali otomatis
+- Visualisasi dashboard gabungan semua layanan
+
+Jika ingin menambah prediksi untuk layanan lain, cukup siapkan data bulanan masing-masing layanan dalam format yang sama, lalu jalankan aplikasi ini atau duplikasi file dan ganti nama target di config.
+
+---
+
+## Pengenalan Pembuat Proyek
+
+**Proyek ini dikembangkan oleh:**
+**Ghalih Putra Arya Dipura**
+Mahasiswa Universitas Djuanda Bogor  
+Program Studi Ilmu Komputer  
+Tanggal pembuatan: 21-08-2025
+
+---
+
+Terima kasih telah menggunakan aplikasi ini.
+Jika ada pertanyaan atau ingin mengembangkan lebih lanjut, silakan hubungi pembuat melalui email: ghalihputra8@gmail.com
+
+---
