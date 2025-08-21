@@ -58,7 +58,12 @@ python -m venv .venv
 source .venv/bin/activate        # (Windows: .venv\Scripts\activate)
 pip install -r requirements.txt
 ```
+## Menjalankan Aplikasi
 
+```bash
+streamlit run app/streamlit_app.py 
+.venv\Scripts\python.exe -m streamlit run app\streamlit_app.py
+```
 ---
 
 ## Format Data Input
@@ -111,13 +116,6 @@ Penjelasan:
 - horizon: default jumlah bulan ke depan untuk prediksi
 
 ---
-
-## Menjalankan Aplikasi
-
-```bash
-streamlit run app/streamlit_app.py 
-.venv\Scripts\python.exe -m streamlit run app\streamlit_app.py
-```
 
 Langkah di UI:
 1. Unggah CSV historis
@@ -246,5 +244,6 @@ Kolom lower/upper hanya ada jika interval diaktifkan.
 ---
 
 Selamat menggunakan!
+
 
 
