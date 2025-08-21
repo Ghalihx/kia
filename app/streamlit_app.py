@@ -88,7 +88,8 @@ dcol = cfg["data"]["date_column"]
 ycol = cfg["data"]["target_column"]
 
 fig_hist = px.line(df, x=dcol, y=ycol, title="Historis Permohonan KIA")
-st.plotly_chart(fig_hist, use_container_width=True)
+# keep initial historical plot but give a unique key to avoid duplicate-ID errors
+st.plotly_chart(fig_hist, use_container_width=True, key="hist_plot")
 
 st.subheader("2) Pelatihan & Evaluasi")
 artifact = None
@@ -176,7 +177,7 @@ if artifact and show_holdout_plot and "holdout_preds" in artifact:
         fig_holdout = px.line(plot_df, x=dcol,
                               y=[c for c in plot_df.columns if c != dcol],
                               title="Holdout Comparison")
-        st.plotly_chart(fig_holdout, use_container_width=True)
+        st.plotly_chart(fig_holdout, use_container_width=True, key="holdout_plot")
     except Exception as e:
         st.warning(f"Gagal membuat plot holdout: {e}")
 
@@ -291,14 +292,53 @@ if predict_button:
             show_cols += ["lower_fmt", "upper_fmt"]
         st.dataframe(fc_df[show_cols], use_container_width=True)
 
-        # Grafik sederhana (tanpa interval shading)
+        # --- Cleaned plotting: anchor + optional interval shading ---
         hist_plot = df[[dcol, ycol]].rename(columns={dcol: "periode", ycol: "aktual"})
         future_plot = fc_df.rename(columns={dcol: "periode"})
-        future_plot["aktual"] = np.nan
-        plot_df = pd.concat([hist_plot, future_plot], ignore_index=True)
+        future_plot["aktual"] = np.nan  # tidak ada nilai aktual di masa depan
 
-        fig = px.line(plot_df, x="periode", y=["aktual", "prediksi"], title=f"Forecast ({model_name})")
-        st.plotly_chart(fig, use_container_width=True)
+        # anchor supaya garis prediksi tersambung ke data historis:
+        last_date = df[dcol].iloc[-1]
+        last_actual = float(df[ycol].iloc[-1])
+        anchor = pd.DataFrame({"periode": [last_date], "prediksi": [last_actual], "aktual": [np.nan]})
+
+        # jika ada interval (lower/upper) tambahkan juga nilai anchor dan pastikan kolom ada
+        if "lower" in fc_df.columns and "upper" in fc_df.columns:
+            anchor["lower"] = last_actual
+            anchor["upper"] = last_actual
+            if "lower" not in future_plot.columns:
+                future_plot["lower"] = np.nan
+            if "upper" not in future_plot.columns:
+                future_plot["upper"] = np.nan
+
+        # gabungkan: historis + anchor + future, lalu sort by periode
+        plot_df = pd.concat([hist_plot, anchor, future_plot], ignore_index=True)
+        plot_df = plot_df.sort_values(by="periode").reset_index(drop=True)
+
+        # Buat figure:
+        if "lower" in plot_df.columns and "upper" in plot_df.columns:
+            import plotly.graph_objects as go
+            fig = go.Figure()
+            # actual
+            fig.add_trace(go.Scatter(x=plot_df["periode"], y=plot_df["aktual"],
+                                     mode="lines", name="aktual", line=dict(color="black")))
+            # prediksi
+            fig.add_trace(go.Scatter(x=plot_df["periode"], y=plot_df["prediksi"],
+                                     mode="lines", name="prediksi", line=dict(color="royalblue")))
+            # shading band (hanya untuk titik yang punya lower/upper)
+            mask = plot_df["lower"].notna() & plot_df["upper"].notna()
+            if mask.any():
+                x_band = list(plot_df.loc[mask, "periode"]) + list(plot_df.loc[mask, "periode"][::-1])
+                y_band = list(plot_df.loc[mask, "upper"]) + list(plot_df.loc[mask, "lower"][::-1])
+                fig.add_trace(go.Scatter(x=x_band, y=y_band, fill="toself",
+                                         fillcolor="rgba(0,176,246,0.12)",
+                                         line=dict(color="rgba(255,255,255,0)"),
+                                         hoverinfo="skip", showlegend=False))
+            fig.update_layout(title=f"Forecast ({model_name})", legend=dict(orientation="h"))
+        else:
+            fig = px.line(plot_df, x="periode", y=["aktual", "prediksi"], title=f"Forecast ({model_name})")
+
+        st.plotly_chart(fig, use_container_width=True, key=f"forecast_plot_{model_name}")
 
         # Download CSV
         export_cols = [dcol, "prediksi"]
